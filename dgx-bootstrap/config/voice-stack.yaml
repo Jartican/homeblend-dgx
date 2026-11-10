@@ -1,0 +1,72 @@
+schema_version: 1
+stack: exocortex-private-voice
+fresh_machine_entrypoint: setup-private-voice-stack.sh
+privacy_boundary: tailscale_https_to_loopback_gateway
+features:
+  stt:
+    status: implemented_and_scripted
+    engine: Speaches
+    model_env: SPEACHES_STT_MODEL
+    default_model: Systran/faster-distil-whisper-small.en
+    fast_model_env: SPEACHES_FAST_STT_MODEL
+    fast_model: Systran/faster-whisper-tiny.en
+    client_modes: [fast, balanced]
+    device: cpu
+  tts:
+    status: implemented_and_scripted
+    engine: Speaches
+    model_env: SPEACHES_TTS_MODEL
+    default_model: speaches-ai/Kokoro-82M-v1.0-ONNX
+    device: cpu
+    transport: direct first-chunk byte stream where supported; short buffered first MP3 on iOS; queued MP3 prefetch
+    limitation: LLM response completes before speech synthesis begins
+  wake_word:
+    status: implemented_and_scripted
+    implementation: sherpa-onnx open-vocabulary Zipformer KWS on CPU
+    model: sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
+    privacy: internal-only container; no raw audio persistence
+    fallback: Whisper runs only after a neural hit to recover an inline command
+    recommended_activation_phrase: Hey Gauss
+    calibration_gate: 3 synthetic voice profiles; 3 positives and 9 confusable negatives
+    streaming_invariant: no artificial tail padding between browser clips
+  browser_noise_suppression:
+    status: implemented_and_scripted
+    implementation: WebRTC echoCancellation and noiseSuppression constraints
+    limitation: browser-dependent and does not remove other speakers reliably
+  server_noise_suppression:
+    status: implemented_and_scripted
+    deploy_env: DEPLOY_SERVER_DENOISER
+    engine: DeepFilterNet3 ONNX C runtime
+    lifecycle: CPU-only internal container
+    raw_audio_retained: false
+    limitation: removes acoustic noise, not intelligible background speakers
+  speaker_embedding:
+    status: pilot_and_scripted
+    model: titanet_large
+    storage: interactive fixed-size LUKS2 vault
+    raw_audio_retained: false
+    authorization_strength: advisory_only
+  diarization:
+    status: implemented_and_scripted_opt_in
+    engine: NVIDIA NeMo Sortformer
+    model: nvidia/diar_streaming_sortformer_4spk-v2.1
+    deploy_env: DEPLOY_SORTFORMER_DIARIZATION
+    device: cpu
+    maximum_speakers: 4
+    consent_required_per_request: true
+    raw_audio_retained: false
+    temporary_audio_storage: memory_only
+    derived_transcript_storage: browser_memory_only
+    private_client_path: /voice/transcript
+    lifecycle: disabled_by_default
+interactive_boundaries:
+  - create the LUKS2 vault passphrase and store its recovery header off-device
+  - unlock the vault after restart until a separately tested TPM2 policy exists
+  - record owner enrollment and held-out calibration samples
+  - obtain explicit consent before multi-speaker transcription
+invariants:
+  - no Funnel or public speech endpoint
+  - no raw microphone audio persisted by the gateway or speaker service
+  - voice similarity never solely authorizes sensitive or destructive actions
+  - absent vault or speaker service fails closed for identity-aware modes
+  - planned features must never be reported as installed

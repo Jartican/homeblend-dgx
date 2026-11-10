@@ -1,0 +1,24 @@
+name: Public safety
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    if: github.event.repository.name == 'homeblend-dgx'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Run repository secret scanner
+        run: python3 scripts/verify-no-secrets.py
+
+      - name: Run public privacy scanner
+        run: python3 scripts/verify-public-privacy.py

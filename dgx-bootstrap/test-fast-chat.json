@@ -1,0 +1,11 @@
+{
+  "model": "exocortex-chat-fast",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply in one short sentence: name one benefit of local inference."
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 80
+}

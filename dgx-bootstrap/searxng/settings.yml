@@ -1,0 +1,31 @@
+use_default_settings: true
+
+general:
+  instance_name: Exocortex Private Search
+  debug: false
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - json
+
+ui:
+  static_use_hash: true
+
+# The small default public-engine pool is routinely exhausted by CAPTCHAs and
+# anonymous-IP rate limits. Keep several independent, keyless fallbacks so a
+# single provider cannot turn an enabled HomeBlend web route into empty data.
+engines:
+  - name: bing
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: duckduckgo weather
+    disabled: false

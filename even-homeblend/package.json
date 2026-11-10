@@ -1,0 +1,23 @@
+{
+  "name": "even-homeblend",
+  "private": true,
+  "version": "0.2.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "pack": "npm run build && evenhub pack --sdk-ver 0.0.14 app.json dist",
+    "simulate": "evenhub-simulator http://localhost:5173",
+    "voice:tunnel": "ssh -N -L 127.0.0.1:18791:127.0.0.1:8791 sparkie"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "^0.0.14"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "^0.1.14",
+    "@evenrealities/evenhub-simulator": "^0.9.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  }
+}

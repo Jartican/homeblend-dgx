@@ -1,0 +1,109 @@
+:root {
+  --ink: #17211c;
+  --muted: #667069;
+  --paper: #f3f0e8;
+  --panel: #fbfaf6;
+  --line: #d8d6ce;
+  --green: #1e6b4f;
+  --green-soft: #dcebe2;
+  --orange: #d86f3d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app-shell { min-height: 100vh; padding: 30px; }
+
+.topbar {
+  max-width: 1240px;
+  margin: 0 auto 22px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.eyebrow, .empty-kicker {
+  color: var(--orange);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .18em;
+}
+
+h1 { margin: 5px 0 2px; font-family: Georgia, serif; font-size: 42px; font-weight: 500; }
+.topbar p { margin: 0; color: var(--muted); }
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.status-dot { width: 9px; height: 9px; border-radius: 50%; background: #39a56e; box-shadow: 0 0 0 4px #dcefe4; }
+.status-dot.offline { background: #bd5443; box-shadow: 0 0 0 4px #f4dfda; }
+
+.workspace {
+  max-width: 1240px;
+  height: calc(100vh - 145px);
+  min-height: 610px;
+  margin: auto;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 18px 50px rgba(40, 48, 42, .08);
+}
+
+.sidebar { padding: 26px; border-right: 1px solid var(--line); background: #ebe8df; }
+.sidebar label { display: block; margin-bottom: 9px; font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+.detail-row { display: flex; flex-direction: column; gap: 5px; padding: 18px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.detail-row span { color: var(--muted); }
+.detail-row code, .detail-row strong { font-size: 12px; overflow-wrap: anywhere; }
+.quiet-button { width: 100%; margin-top: 22px; padding: 11px; border: 1px solid var(--ink); border-radius: 8px; background: transparent; cursor: pointer; }
+.quiet-button:hover { background: var(--ink); color: white; }
+.privacy-note { margin-top: 20px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.chat-panel { min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; }
+.chat-history { padding: 32px; overflow-y: auto; }
+.empty-state { max-width: 520px; margin: 18vh auto 0; text-align: center; }
+.empty-state h2 { margin: 8px 0; font-family: Georgia, serif; font-size: 32px; font-weight: 500; }
+.empty-state p { color: var(--muted); line-height: 1.6; }
+
+.message { max-width: 78%; margin-bottom: 22px; padding: 17px 19px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.message.user { margin-left: auto; border-color: #b9d5c5; background: var(--green-soft); }
+.message-label { margin-bottom: 8px; color: var(--green); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.message-content { font-size: 14px; line-height: 1.65; }
+.message-content p:first-child { margin-top: 0; }
+.message-content p:last-child { margin-bottom: 0; }
+.message-content pre { overflow-x: auto; padding: 14px; border-radius: 8px; background: #17211c; color: #edf4ef; }
+.message-content code { font-family: "Cascadia Code", Consolas, monospace; }
+.run-meta { min-height: 30px; padding: 5px 30px; color: var(--muted); font-size: 12px; text-align: right; }
+
+.composer { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 18px; border-top: 1px solid var(--line); background: #f7f5ef; }
+.prompt { width: 100%; min-height: 78px; max-height: 190px; resize: vertical; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); font: inherit; line-height: 1.45; }
+.prompt:focus { outline: 2px solid #8ab79e; border-color: transparent; }
+.send-button { align-self: stretch; min-width: 100px; border: 0; border-radius: 10px; background: var(--green); color: white; font-size: 14px; font-weight: 750; cursor: pointer; }
+.send-button:hover { background: #18583f; }
+
+@media (max-width: 760px) {
+  .app-shell { padding: 16px; }
+  .topbar { align-items: flex-start; }
+  h1 { font-size: 34px; }
+  .workspace { height: auto; min-height: calc(100vh - 130px); grid-template-columns: 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .detail-row, .privacy-note { display: none; }
+  .message { max-width: 92%; }
+}

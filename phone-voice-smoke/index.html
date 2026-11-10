@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>HomeBlend Phone Test</title>
+  <style>
+    :root { color-scheme: dark; font: 17px system-ui, sans-serif; background: #101316; color: #f3f5f7; }
+    body { margin: 0 auto; max-width: 44rem; padding: 1rem; }
+    h1 { font-size: 1.4rem; } button { min-height: 3rem; padding: .6rem 1rem; margin: .25rem; font-size: 1rem; }
+    .card { background: #1b2026; border-radius: .8rem; padding: 1rem; margin: 1rem 0; }
+    .label { color: #9fb0c0; font-size: .8rem; text-transform: uppercase; }
+    #status { color: #82d9a0; } #error { color: #ff9b9b; white-space: pre-wrap; }
+    #transcript, #answer { min-height: 2.5rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>HomeBlend phone microphone test</h1>
+  <p>Foreground Safari test only. Audio is streamed to your DGX over the tailnet and is not saved by this page.</p>
+  <div class="card"><span class="label">Status</span><div id="status">Disconnected</div><div id="error"></div></div>
+  <div class="card">
+    <label>Mode <select id="mode"><option value="assistant">Ask</option><option value="translation">Translation</option><option value="private">Private</option></select></label><br>
+    <label>Source language <input id="sourceLanguage" placeholder="auto-detect"></label><br>
+    <label>Target language <input id="targetLanguage" value="English"></label><br>
+    <label><input id="shareLocation" type="checkbox"> Share approximate phone location this session</label><br>
+    <label>Voice credential <input id="credential" type="password" autocomplete="off" placeholder="Kept in this tab only"></label>
+  </div>
+  <div>
+    <button id="connect">Connect</button>
+    <button id="speak" disabled>Speak</button>
+    <button id="wake" disabled>Enable Hey Gauss</button>
+    <button id="calibrate" disabled>Test my Gauss</button>
+    <button id="submit" disabled>Submit</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <div class="card"><span class="label">You</span><div id="transcript">—</div></div>
+  <div class="card"><span class="label">HomeBlend</span><div id="answer">—</div></div>
+  <div class="card"><span class="label">Gauss calibration</span><div id="calibration">Tap “Test my Gauss,” then say “Hey Gauss” once naturally. Audio is analyzed privately and discarded.</div></div>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const ui = { status: $('status'), error: $('error'), transcript: $('transcript'), answer: $('answer'),
+    connect: $('connect'), speak: $('speak'), wake: $('wake'), calibrate: $('calibrate'), submit: $('submit'), disconnect: $('disconnect'),
+    mode: $('mode'), sourceLanguage: $('sourceLanguage'), targetLanguage: $('targetLanguage'),
+    shareLocation: $('shareLocation'), credential: $('credential'), calibration: $('calibration') };
+  let socket, sessionState = 'new', stream, context, source, processor;
+  let sequence = 0, samplesSent = 0, responseText = '';
+  let captureMonitor, captureStartedAt = 0, captureLastVoiceAt = 0;
+  let captureSpeechStarted = false, captureCommitSent = false, captureNoiseFloor = 0.004;
+  let wakeEnabled = false, wakeStream, wakeRecorder, wakeTimer, wakeSession;
+  let calibrationActive = false, calibrationAttempt = 0, rearmWakeAfterCancel = false;
+  let sessionLocation = null;
+  let wakeClipMs = 4500, wakeClipCount = 0;
+
+  const sendControl = (type, fields = {}) => socket?.readyState === WebSocket.OPEN &&
+    socket.send(JSON.stringify({ protocol_version: 1, type, ...fields }));
+  const voiceFetch = (url, options = {}) => {
+    const headers = new Headers(options.headers || {});
+    const credential = ui.credential.value.trim();
+    if (credential) headers.set('Authorization', `Bearer ${credential}`);
+    return fetch(url, { ...options, headers, credentials: 'omit' });
+  };
+  const setError = value => { ui.error.textContent = value || ''; };
+  const updateButtons = () => {
+    const open = socket?.readyState === WebSocket.OPEN;
+    ui.connect.disabled = !!open;
+    ui.disconnect.disabled = !open;
+    ui.speak.disabled = !open || !['armed', 'follow_up'].includes(sessionState);
+    ui.wake.disabled = !open || (!wakeEnabled && !['armed', 'follow_up'].includes(sessionState));
+    ui.calibrate.disabled = !open || calibrationActive || wakeEnabled || !['armed', 'follow_up'].includes(sessionState);
+    ui.wake.textContent = wakeEnabled ? 'Stop Hey Gauss' : 'Enable Hey Gauss';
+    ui.submit.disabled = !open || sessionState !== 'capturing';
+    ui.mode.disabled = !!open; ui.sourceLanguage.disabled = !!open; ui.targetLanguage.disabled = !!open;
+    ui.shareLocation.disabled = !!open; ui.credential.disabled = !!open;
+  };
+
+  function approximateLocation() {
+    return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+      position => resolve({
+        latitude: Math.round(position.coords.latitude * 100) / 100,
+        longitude: Math.round(position.coords.longitude * 100) / 100
+      }),
+      reject,
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+    ));
+  }
+
+  async function connect() {
+    setError('');
+    sessionLocation = null;
+    if (ui.shareLocation.checked) {
+      if (!navigator.geolocation) return setError('Location is unavailable in this browser.');
+      ui.status.textContent = 'Requesting approximate location…';
+      try { sessionLocation = await approximateLocation(); }
+      catch { return setError('Location permission was denied or unavailable.'); }
+    }
+    try {
+      const response = await voiceFetch('/voice/v1/voice/config', { cache: 'no-store' });
+      if (response.ok) {
+        const config = await response.json();
+        // Safari's prototype uses one bounded clip for both the wake phrase and
+        // an inline request. Keep enough post-wake room for a natural sentence.
+        wakeClipMs = Math.max(4500, Math.min(10000, Number(config.wake_clip_ms) || 4500));
+      }
+    } catch { /* Connection error below remains authoritative. */ }
+    const url = new URL('/voice/v2/voice/realtime', location.origin);
+    url.protocol = 'wss:';
+    const credential = ui.credential.value.trim();
+    if (credential && (credential.length < 32 || credential.length > 256 || !/^[A-Za-z0-9_-]+$/.test(credential))) {
+      return setError('Voice credential must be 32–256 base64url characters.');
+    }
+    socket = credential
+      ? new WebSocket(url, ['homeblend.voice.v1', `auth.${credential}`])
+      : new WebSocket(url);
+    socket.binaryType = 'arraybuffer';
+    ui.status.textContent = 'Connecting securely…';
+    socket.onopen = updateButtons;
+    socket.onmessage = event => {
+      if (typeof event.data !== 'string') return; // Text-only test ignores response PCM.
+      let message;
+      try { message = JSON.parse(event.data); } catch { return setError('Malformed server message.'); }
+      if (message.protocol_version !== 1 || typeof message.type !== 'string') return;
+      if (message.type === 'session.ready') {
+        const translation = ui.mode.value === 'translation';
+        sendControl('session.start', {
+          device: 'phone', source: 'safari_phone_test', model: 'auto', effort: 1, tool_profile: 'web', voice: 'af_heart', mode: ui.mode.value,
+          ...(sessionLocation ? { location: sessionLocation } : {}),
+          ...(translation && ui.sourceLanguage.value.trim() ? { source_language: ui.sourceLanguage.value.trim() } : {}),
+          ...(translation ? { target_language: ui.targetLanguage.value.trim() || 'English' } : {})
+        });
+      } else if (message.type === 'session.state') {
+        sessionState = message.state;
+        ui.status.textContent = `Connected — ${String(sessionState).replace('_', ' ')}`;
+        updateButtons();
+        if (rearmWakeAfterCancel && sessionState === 'armed') {
+          rearmWakeAfterCancel = false; toggleWake();
+        }
+      } else if (message.type === 'mode.changed') {
+        if (['assistant', 'translation', 'private'].includes(message.mode)) ui.mode.value = message.mode;
+        ui.sourceLanguage.value = message.source_language || '';
+        ui.targetLanguage.value = message.target_language || '';
+      } else if (message.type === 'transcript.delta') {
+        ui.transcript.textContent = message.text || '—';
+      } else if (message.type === 'response.text.delta') {
+        responseText += message.delta || '';
+        ui.answer.textContent = responseText || '—';
+      } else if (message.type === 'response.text.done') {
+        responseText = message.text || responseText;
+        ui.answer.textContent = responseText || '—';
+      } else if (message.type === 'response.audio.done') {
+        // This client is deliberately text-only, so no audio remains to play.
+        sendControl('playback.finished');
+      } else if (message.type === 'error') {
+        const detail = String(message.detail || message.code || 'Voice Core error');
+        if (detail.includes('private realtime transcription detected no speech')) {
+          setError('');
+          stopMicrophone();
+          rearmWakeAfterCancel = true;
+          ui.status.textContent = 'No speech heard — listening again for Hey Gauss.';
+          ui.transcript.textContent = 'No speech heard.';
+          updateButtons();
+          return;
+        }
+        setError(detail);
+      }
+    };
+    socket.onerror = () => setError('WebSocket connection failed. Confirm Tailscale is connected.');
+    socket.onclose = () => { stopWake(false); stopMicrophone(); sessionState = 'closed'; ui.status.textContent = 'Disconnected'; updateButtons(); };
+  }
+
+  async function beginTurn(controlType = null) {
+    setError(''); responseText = ''; ui.answer.textContent = '—';
+    ui.transcript.textContent = 'Listening… pause when finished; submission is automatic.';
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
+      context = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' });
+      await context.resume();
+      source = context.createMediaStreamSource(stream);
+      processor = context.createScriptProcessor(2048, 1, 1);
+      processor.onaudioprocess = event => {
+        if (sessionState !== 'capturing' || socket?.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        if (!captureStartedAt) captureStartedAt = Date.now();
+        let energy = 0;
+        for (let i = 0; i < input.length; i++) energy += input[i] * input[i];
+        const rms = Math.sqrt(energy / Math.max(1, input.length));
+        const elapsed = Date.now() - captureStartedAt;
+        if (!captureSpeechStarted) {
+          captureNoiseFloor = captureNoiseFloor * 0.95 + rms * 0.05;
+          if (elapsed > 250 && rms > Math.max(0.012, captureNoiseFloor * 2.8)) {
+            captureSpeechStarted = true; captureLastVoiceAt = Date.now();
+          }
+        } else if (rms > Math.max(0.008, captureNoiseFloor * 1.8)) {
+          captureLastVoiceAt = Date.now();
+        }
+        const pcm = resampleAndEncode(input, context.sampleRate);
+        if (pcm.byteLength) socket.send(packPCM(pcm));
+      };
+      source.connect(processor); processor.connect(context.destination);
+      sequence = 0; samplesSent = 0;
+      captureStartedAt = captureLastVoiceAt = 0; captureSpeechStarted = captureCommitSent = false;
+      captureNoiseFloor = 0.004; clearInterval(captureMonitor);
+      captureMonitor = setInterval(() => {
+        if (sessionState !== 'capturing' || captureCommitSent || !captureStartedAt) return;
+        const now = Date.now();
+        if (captureSpeechStarted && now - captureLastVoiceAt >= 900) submit();
+        else if (now - captureStartedAt >= 15000) cancelSilentTurn();
+      }, 100);
+      const type = controlType || (sessionState === 'follow_up' ? 'speech.started' : 'turn.start');
+      sendControl(type, { turn_id: crypto.randomUUID() });
+    } catch (error) { stopMicrophone(); setError(error.message || String(error)); }
+  }
+
+  function resampleAndEncode(input, inputRate) {
+    const count = Math.max(1, Math.floor(input.length * 16000 / inputRate));
+    const output = new ArrayBuffer(count * 2); const view = new DataView(output);
+    for (let i = 0; i < count; i++) {
+      const sample = Math.max(-1, Math.min(1, input[Math.min(input.length - 1, Math.floor(i * inputRate / 16000))]));
+      view.setInt16(i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+    }
+    return output;
+  }
+
+  function packPCM(pcm) {
+    const frame = new ArrayBuffer(24 + pcm.byteLength), view = new DataView(frame);
+    [0x45, 0x58, 0x56, 0x32].forEach((b, i) => view.setUint8(i, b));
+    view.setUint8(4, 1); view.setUint8(5, 1); view.setUint16(6, 0);
+    view.setUint32(8, sequence++); const timestamp = Math.round(1000 * samplesSent / 16000);
+    view.setUint32(12, Math.floor(timestamp / 4294967296)); view.setUint32(16, timestamp >>> 0);
+    view.setUint32(20, pcm.byteLength); new Uint8Array(frame, 24).set(new Uint8Array(pcm));
+    samplesSent += pcm.byteLength / 2; return frame;
+  }
+
+  function stopMicrophone() {
+    clearInterval(captureMonitor); captureMonitor = null;
+    processor?.disconnect(); source?.disconnect(); processor = source = null;
+    stream?.getTracks().forEach(track => track.stop()); stream = null;
+    context?.close(); context = null;
+  }
+  async function toggleWake() {
+    if (wakeEnabled) return stopWake(true);
+    try {
+      wakeStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      wakeEnabled = true; wakeSession = crypto.randomUUID().replaceAll('-', ''); wakeClipCount = 0;
+      ui.status.textContent = 'Listening privately for “Hey Gauss”…'; updateButtons(); startWakeClip();
+    } catch (error) { setError(error.message || String(error)); stopWake(false); }
+  }
+  function inlineWakeCommand(transcript) {
+    return String(transcript || '')
+      .replace(/^\s*(?:(?:hey|okay|ok)[\s,]+)?(?:gauss|gaus|goss|gouse|gauze|gals|girls)\b[\s,.:;!?—-]*/i, '')
+      .trim();
+  }
+  function startWakeClip() {
+    if (!wakeEnabled || !wakeStream) return;
+    const chunks = [];
+    wakeRecorder = new MediaRecorder(wakeStream);
+    wakeRecorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+    wakeRecorder.onstop = async () => {
+      clearTimeout(wakeTimer);
+      if (!wakeEnabled) return;
+      const blob = new Blob(chunks, { type: wakeRecorder.mimeType || 'audio/webm' });
+      try {
+        wakeClipCount += 1;
+        ui.status.textContent = `Listening privately for “Hey Gauss”… checked ${wakeClipCount}`;
+        const form = new FormData(); form.append('audio', blob, 'gauss-listen'); form.append('session_id', wakeSession);
+        const response = await voiceFetch('/voice/v1/voice/wake', { method: 'POST', body: form, cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `Wake service returned ${response.status}`);
+        if (result.heard) {
+          stopWake(false);
+          const wakeInlineHint = inlineWakeCommand(result.transcript);
+          if (!wakeInlineHint) {
+            // A bare wake phrase must open capture immediately. Waiting for a
+            // second quality decode here creates a dead interval in which the
+            // user naturally begins speaking but no microphone is streaming.
+            ui.status.textContent = 'Hey Gauss heard — listening now.';
+            navigator.vibrate?.(40);
+            await beginTurn(sessionState === 'follow_up' ? 'speech.started' : 'wake.detected');
+            return;
+          }
+          // The wake model only decides whether Gauss was heard. Decode the
+          // same in-memory clip with quality STT when its diagnostic transcript
+          // indicates that the user already included an inline request.
+          const qualityForm = new FormData();
+          qualityForm.append('audio', blob, 'gauss-inline');
+          qualityForm.append('stt_mode', 'balanced');
+          qualityForm.append('server_denoise', 'false');
+          const qualityResponse = await voiceFetch('/voice/v1/voice/transcribe', { method: 'POST', body: qualityForm, cache: 'no-store' });
+          const qualityResult = await qualityResponse.json();
+          const qualityTranscript = String(qualityResult.transcript || '').trim();
+          const inlineCommand = qualityResponse.ok ? inlineWakeCommand(qualityTranscript) : '';
+          if (inlineCommand) {
+            ui.transcript.textContent = inlineCommand;
+            ui.status.textContent = 'Submitting inline request…';
+            sendControl('text.turn', { turn_id: crypto.randomUUID(), text: inlineCommand });
+          } else {
+            ui.status.textContent = 'Hey Gauss heard — listening now.';
+            navigator.vibrate?.(40);
+            await beginTurn(sessionState === 'follow_up' ? 'speech.started' : 'wake.detected');
+          }
+        } else { startWakeClip(); }
+      } catch (error) {
+        if (wakeEnabled) { setError(error.message || String(error)); setTimeout(startWakeClip, 500); }
+      }
+    };
+    wakeRecorder.start(); wakeTimer = setTimeout(() => {
+      if (wakeRecorder?.state === 'recording') wakeRecorder.stop();
+    }, wakeClipMs);
+  }
+  function stopWake(showStatus) {
+    wakeEnabled = false; clearTimeout(wakeTimer);
+    if (wakeRecorder?.state === 'recording') wakeRecorder.stop(); wakeRecorder = null;
+    wakeStream?.getTracks().forEach(track => track.stop()); wakeStream = null;
+    if (showStatus) ui.status.textContent = `Connected — ${sessionState.replace('_', ' ')}`;
+    updateButtons();
+  }
+  async function calibrateGauss() {
+    if (calibrationActive) return;
+    calibrationActive = true; calibrationAttempt += 1; setError(''); updateButtons();
+    let sampleStream;
+    try {
+      sampleStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      const chunks = [], recorder = new MediaRecorder(sampleStream);
+      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+      const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+      recorder.start(); ui.status.textContent = 'Say “Hey Gauss” once, naturally…';
+      await new Promise(resolve => setTimeout(resolve, 2600));
+      if (recorder.state === 'recording') recorder.stop();
+      await stopped;
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      if (!blob.size) throw new Error('Calibration microphone returned no audio.');
+      const wakeForm = new FormData();
+      wakeForm.append('audio', blob, 'gauss-calibration');
+      wakeForm.append('session_id', `calibration-${crypto.randomUUID().replaceAll('-', '')}`);
+      const sttForm = new FormData();
+      sttForm.append('audio', blob, 'gauss-calibration'); sttForm.append('stt_mode', 'balanced'); sttForm.append('server_denoise', 'false');
+      const [wakeResponse, sttResponse] = await Promise.all([
+        voiceFetch('/voice/v1/voice/wake', { method: 'POST', body: wakeForm, cache: 'no-store' }),
+        voiceFetch('/voice/v1/voice/transcribe', { method: 'POST', body: sttForm, cache: 'no-store' })
+      ]);
+      const wakeResult = await wakeResponse.json(), sttResult = await sttResponse.json();
+      if (!wakeResponse.ok) throw new Error(wakeResult.detail || `Wake calibration returned ${wakeResponse.status}`);
+      if (!sttResponse.ok) throw new Error(sttResult.detail || `Transcription returned ${sttResponse.status}`);
+      const heard = wakeResult.heard === true;
+      const method = String(wakeResult.detection_method || 'none');
+      const wakeTranscript = String(wakeResult.transcript || '').trim() || '(no wake transcript)';
+      const generalTranscript = String(sttResult.transcript || '').trim() || '(no speech recognized)';
+      const guidance = method === 'neural_kws'
+        ? 'The neural wake detector fired.'
+        : method === 'private_whisper_fallback'
+          ? 'The neural detector missed; the private wake-biased Whisper fallback recovered Gauss.'
+          : 'Neither wake path accepted this pronunciation.';
+      ui.calibration.textContent = `Attempt ${calibrationAttempt}: ${heard ? 'HEARD GAUSS' : 'did not fire'} via ${method}. Wake-biased decode: “${wakeTranscript}”. General transcription: “${generalTranscript}”. ${guidance} Audio discarded.`;
+    } catch (error) {
+      setError(error.message || String(error));
+    } finally {
+      sampleStream?.getTracks().forEach(track => track.stop());
+      calibrationActive = false; ui.status.textContent = `Connected — ${sessionState.replace('_', ' ')}`; updateButtons();
+    }
+  }
+  function submit() {
+    if (captureCommitSent || sessionState !== 'capturing') return;
+    captureCommitSent = true; stopMicrophone(); ui.status.textContent = 'Submitting…';
+    sendControl('turn.commit');
+  }
+  function cancelSilentTurn() {
+    if (captureCommitSent || sessionState !== 'capturing') return;
+    captureCommitSent = true; stopMicrophone(); rearmWakeAfterCancel = true;
+    ui.transcript.textContent = 'No speech heard — listening again for Hey Gauss.';
+    sendControl('turn.cancel');
+  }
+  function disconnect() { stopWake(false); stopMicrophone(); sessionLocation = null; sendControl('session.close'); socket?.close(); }
+  ui.connect.onclick = connect; ui.speak.onclick = () => beginTurn(); ui.wake.onclick = toggleWake;
+  ui.calibrate.onclick = calibrateGauss; ui.submit.onclick = submit; ui.disconnect.onclick = disconnect;
+  addEventListener('pagehide', disconnect); updateButtons();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+name: iOS companion
+
+on:
+  push:
+    paths:
+      - "omi-phone/**"
+      - "omi-phone-app/**"
+      - ".github/workflows/ios-companion.yml"
+  pull_request:
+    paths:
+      - "omi-phone/**"
+      - "omi-phone-app/**"
+      - ".github/workflows/ios-companion.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  core-and-simulator:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Test platform-neutral core
+        run: swift test --package-path omi-phone
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the iOS project
+        working-directory: omi-phone-app
+        run: xcodegen generate
+
+      - name: Resolve pinned packages
+        working-directory: omi-phone-app
+        run: >-
+          xcodebuild
+          -project HomeBlendCompanion.xcodeproj
+          -scheme HomeBlendCompanion
+          -resolvePackageDependencies
+
+      - name: Build unsigned simulator app
+        working-directory: omi-phone-app
+        run: >-
+          xcodebuild
+          -project HomeBlendCompanion.xcodeproj
+          -scheme HomeBlendCompanion
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build

@@ -1,0 +1,48 @@
+{
+  "defaultRoute": "interactive-code",
+  "routes": {
+    "interactive-code": "local-code-fast",
+    "background-code": "local-code-quality",
+    "interactive-vision": "local-vision-fast",
+    "background-vision": "local-vision-quality"
+  },
+  "profiles": {
+    "local-code-fast": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "maxOutputTokens": 1024
+    },
+    "local-code-quality": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "maxOutputTokens": 2048
+    },
+    "local-vision-fast": {
+      "provider": "ollama",
+      "model": "qwen2.5vl:3b",
+      "maxOutputTokens": 1024
+    },
+    "local-vision-quality": {
+      "provider": "ollama",
+      "model": "qwen2.5vl:7b",
+      "maxOutputTokens": 2048
+    }
+  },
+  "providers": {
+    "ollama": {
+      "kind": "openai-compatible",
+      "baseUrl": "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}/v1",
+      "apiKey": "ollama"
+    },
+    "openai": {
+      "kind": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "${OPENAI_API_KEY}"
+    },
+    "anthropic": {
+      "kind": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "apiKey": "${ANTHROPIC_API_KEY}"
+    }
+  }
+}

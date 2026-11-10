@@ -1,0 +1,44 @@
+services:
+  speaker-verifier:
+    build:
+      context: ./speaker-service
+    image: ${SPEAKER_IMAGE:-exocortex/speaker-verifier:local}
+    platform: linux/arm64
+    container_name: ${SPEAKER_CONTAINER:-exocortex-speaker-verifier}
+    restart: unless-stopped
+    networks:
+      - voice-private
+      - bootstrap-egress
+    environment:
+      SPEAKER_MODEL: ${SPEAKER_MODEL:-titanet_large}
+      SPEAKER_DEVICE: ${SPEAKER_DEVICE:-cpu}
+      SPEAKER_THRESHOLD: ${SPEAKER_THRESHOLD:-0.72}
+      SPEAKER_MIN_ENROLLMENT_SAMPLES: ${SPEAKER_MIN_ENROLLMENT_SAMPLES:-5}
+      SPEAKER_MAX_ENROLLMENT_SAMPLES: ${SPEAKER_MAX_ENROLLMENT_SAMPLES:-12}
+      SPEAKER_VAULT_ROOT: /vault
+    volumes:
+      - /var/lib/exocortex/biometrics:/vault:rw
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${SPEAKER_MEMORY_LIMIT:-8g}
+    cpus: ${SPEAKER_CPU_LIMIT:-6.0}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 15m
+
+networks:
+  voice-private:
+    external: true
+    name: ${EXOCORTEX_VOICE_NETWORK:-exocortex-voice}
+  bootstrap-egress:
+    external: true
+    name: ${OPEN_WEBUI_NETWORK:-exocortex-tools}

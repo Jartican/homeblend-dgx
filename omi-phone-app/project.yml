@@ -1,0 +1,53 @@
+name: HomeBlendCompanion
+
+options:
+  bundleIdPrefix: com.homeblend
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  OmiPhoneCore:
+    path: ../omi-phone
+  SwiftOpus:
+    url: https://github.com/nelcea/swift-opus.git
+    revision: a22f542387f1dd72c6c045ecc3b21dfed71acce2
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  HomeBlendCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    info:
+      path: Config/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.homeblend.companion
+        PRODUCT_NAME: HomeBlend
+        # Safe non-routable default. Pin the exact new Spark host with
+        # configure-voice-core-host.py before generating/signing the project.
+        VOICE_CORE_HOST: voice-core.invalid
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: OmiPhoneCore
+        product: OmiPhoneCore
+      - package: SwiftOpus
+        product: Opus
+
+schemes:
+  HomeBlendCompanion:
+    build:
+      targets:
+        HomeBlendCompanion: all
+    run:
+      config: Debug
+    archive:
+      config: Release

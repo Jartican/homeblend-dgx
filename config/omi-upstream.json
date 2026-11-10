@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/BasedHardware/omi.git",
+  "maintained_fork": "https://github.com/Jartican/omi.git",
+  "license": "MIT",
+  "reviewed_commit": "a8f3ad08ebf6c3674000a4a6f1d25d777ce88943",
+  "reviewed_at": "2026-11-09",
+  "strategy": "fork_mobile_adapt_backend_contract",
+  "production_data_plane": "homeblend_dgx",
+  "upstream_cloud_allowed": false,
+  "raw_audio_persistence_allowed": false
+}

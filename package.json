@@ -1,0 +1,11 @@
+{
+  "name": "exocortex",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "models:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-models.ps1",
+    "models:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/model-status.ps1",
+    "models:smoke": "node scripts/smoke-code-model.mjs",
+    "models:smoke-vision": "node scripts/smoke-vision-model.mjs"
+  }
+}

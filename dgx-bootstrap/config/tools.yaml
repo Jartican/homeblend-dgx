@@ -1,0 +1,28 @@
+version: 1
+tools:
+  search_web:
+    enabled: true
+    provider: searxng
+    max_results: 8
+    safe_for_automatic_approval: true
+  fetch_url:
+    enabled: true
+    max_bytes: 1000000
+    timeout_seconds: 15
+    allowed_schemes: [http, https]
+    block_private_networks: true
+    safe_for_automatic_approval: true
+  search_memory:
+    enabled: false
+    note: Enabled after the Exocortex schema and authorization boundary are inventoried.
+  save_memory:
+    enabled: false
+    requires_confirmation: true
+    note: Enabled after the Exocortex schema and authorization boundary are inventoried.
+
+security:
+  trust_remote_page_content: false
+  treat_tool_output_as_untrusted_data: true
+  expose_host_filesystem: false
+  expose_docker_socket: false
+  allow_gpu: false

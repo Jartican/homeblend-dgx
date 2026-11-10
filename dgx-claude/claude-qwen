@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+launcher="$HOME/.local/bin/claude-qwen"
+[[ -x "$launcher" ]] || {
+  echo 'Claude launcher is not installed. Run dgx-bootstrap/bootstrap-dgx.sh first.' >&2
+  exit 1
+}
+
+exec "$launcher" "$@"

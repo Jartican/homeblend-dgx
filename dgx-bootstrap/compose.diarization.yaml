@@ -1,0 +1,45 @@
+services:
+  diarization:
+    build:
+      context: ./diarization-service
+    image: ${DIARIZATION_IMAGE:-exocortex/sortformer-diarization:local}
+    platform: linux/arm64
+    container_name: ${DIARIZATION_CONTAINER:-exocortex-diarization}
+    restart: unless-stopped
+    networks:
+      - voice-private
+      - bootstrap-egress
+    environment:
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-nvidia/diar_streaming_sortformer_4spk-v2.1}
+      DIARIZATION_DEVICE: ${DIARIZATION_DEVICE:-cpu}
+      DIARIZATION_MAX_AUDIO_BYTES: ${DIARIZATION_MAX_AUDIO_BYTES:-100000000}
+      DIARIZATION_MAX_PCM_BYTES: ${DIARIZATION_MAX_PCM_BYTES:-230400000}
+      DIARIZATION_MAX_CONCURRENT: ${DIARIZATION_MAX_CONCURRENT:-1}
+    volumes:
+      - /var/lib/exocortex/biometrics:/vault:rw
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${DIARIZATION_MEMORY_LIMIT:-12g}
+    cpus: ${DIARIZATION_CPU_LIMIT:-8.0}
+    tmpfs:
+      # NeMo expands the compressed .nemo archive during model restoration.
+      # Keep that scratch data in RAM, but allow enough room for extraction.
+      - /tmp:rw,noexec,nosuid,size=4g,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 20m
+
+networks:
+  voice-private:
+    external: true
+    name: ${EXOCORTEX_VOICE_NETWORK:-exocortex-voice}
+  bootstrap-egress:
+    external: true
+    name: ${OPEN_WEBUI_NETWORK:-exocortex-tools}

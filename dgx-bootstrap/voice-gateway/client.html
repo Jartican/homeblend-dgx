@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Exocortex Voice</title>
+  <style>
+    :root{color-scheme:dark;font:16px system-ui;background:#0c1117;color:#e6edf3}body{max-width:44rem;margin:auto;padding:1rem}
+    h1{font-size:1.5rem}.card{background:#151b23;border:1px solid #30363d;border-radius:14px;padding:1rem;margin:.8rem 0}
+    button,input,select{font:inherit;border-radius:10px;padding:.75rem;border:1px solid #48515d;background:#202833;color:inherit}
+    button{min-height:3rem;font-weight:700}button.primary{background:#238636}button.recording{background:#da3633}
+    .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}.grow{flex:1}.muted{color:#9da7b3;font-size:.9rem}
+    .turn{border-top:1px solid #30363d;padding:.7rem 0;white-space:pre-wrap}.answer{color:#b6e3ff}audio{width:100%;margin-top:.6rem}
+    .meter{height:.75rem;background:#202833;border:1px solid #48515d;border-radius:1rem;overflow:hidden;margin:.8rem 0}
+    .meter>div{height:100%;width:0;background:#3fb950;transition:width 80ms linear}.meter.live{box-shadow:0 0 0 2px #23863655}
+    .pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:.35rem;margin:.8rem 0}.step{font-size:.75rem;text-align:center;padding:.35rem;border-radius:.5rem;background:#202833;color:#7d8590}
+    .step.active{background:#1f6feb;color:white;animation:pulse 1.1s infinite}.step.done{background:#238636;color:white}.step.error{background:#da3633;color:white}
+    .preview{min-height:1.5rem;padding:.65rem;border-left:3px solid #1f6feb;background:#0d1520;white-space:pre-wrap}.hidden{display:none}@keyframes pulse{50%{opacity:.6}}button:disabled{opacity:.45}
+    button.wake{background:#6e40c9}button.wake.active{background:#b35900;animation:pulse 1.4s infinite}.wake-note{border-left:3px solid #a371f7;padding-left:.7rem}
+  </style>
+</head>
+<body>
+  <h1>Exocortex Voice</h1>
+  <div class="card muted">Private tailnet path · no browser/cloud speech · history stays in this page's memory · <a href="speaker">set up private speaker recognition</a> · <a href="transcript">consented multi-speaker transcript</a></div>
+  <div class="card">
+    <div class="row">
+      <label>Model <select id="model"><option>auto</option><option>8b</option><option>27b</option></select></label>
+      <label>Effort <select id="effort"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+      <label>Listening <select id="sttMode"><option value="fast" selected>Fast</option><option value="balanced">More accurate</option></select></label>
+      <label>Voice <select id="voice">
+        <option value="af_heart">Heart · warm US</option><option value="af_bella">Bella · expressive US</option>
+        <option value="am_fenrir">Fenrir · lively US</option><option value="am_michael">Michael · steady US</option>
+        <option value="am_puck">Puck · playful US</option><option value="bm_fable">Fable · bright UK</option>
+        <option value="bm_george">George · warm UK</option><option value="bf_emma">Emma · clear UK</option>
+      </select></label>
+      <label><input id="web" type="checkbox"> web search</label>
+      <label><input id="continuous" type="checkbox" checked> continue conversation</label>
+      <label title="TitaNet filters completed requests; it never authorizes sensitive actions."><input id="ownerOnly" type="checkbox" disabled> owner voice only</label>
+      <label>Reply window <select id="replyWindow"><option value="5000">5s</option><option value="8000" selected>8s</option><option value="12000">12s</option><option value="20000">20s</option></select></label>
+    </div>
+    <p><input id="text" class="grow" style="width:calc(100% - 1.6rem)" placeholder="Type a message or press record"></p>
+    <div class="row"><button id="record" class="primary grow">Start recording</button><button id="wake" class="wake grow">Enable “Gauss”</button><button id="send">Send text</button><button id="previewVoice">Preview voice</button><button id="clear">Clear</button></div>
+    <p class="muted wake-note">Foreground pilot: keep this page visible. Say “Hey Gauss,” wait for the chime, then speak your request. Bare “Gauss” is enabled but less reliable across voices. Anyone nearby can activate the listener; enable owner voice only to reject a completed non-owner request. Voice similarity is not authorization.</p>
+    <p id="wakeHeard" class="muted hidden"></p>
+    <div id="meter" class="meter" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="level"></div></div>
+    <div class="pipeline"><div id="p-send" class="step">Sending</div><div id="p-stt" class="step">Transcribing</div><div id="p-think" class="step">Thinking</div><div id="p-speak" class="step">Speaking</div></div>
+    <div id="preview" class="preview hidden"></div>
+    <p id="status" class="muted">Checking private gateway…</p><audio id="audio" controls></audio>
+  </div>
+  <div id="turns" class="card"></div>
+<script>
+  const $=id=>document.getElementById(id), history=[]; let recorder,chunks=[],stream,audioContext,source,analyser,levelFrame,heardAudio=false,micLevel=0,apiBase,audioUrl;
+  const appleMobile=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  let wakeEnabled=false,wakePhase='off',wakeStream,wakeRecorder,wakeChunks=[],wakeTimer,commandTimer,silenceTimer,wakeLock,wakeGeneration=0,wakeQueue=[],wakeAttempts=0,wakeDropped=0;
+  let wakeWord='Gauss',wakeAliases=['gauss','gaus','goss','gouse','gauze'],wakeClipMs=1000,commandMaxMs=10000,silenceMs=800,conversationReplyMs=8000,rearmDelayMs=150,streamStartTimeoutMs=20000,streamingTts=true,wakeTranscribing=false,wakeSession='';
+  const stages=['send','stt','think','speak'];
+  function setStage(active,done=[]){for(const name of stages){const el=$('p-'+name);el.className='step'+(done.includes(name)?' done':name===active?' active':'')}}
+  function failStage(name,message){setStage();if(name)$('p-'+name).className='step error';$('status').textContent=message}
+  async function jsonResponse(response,label){let value;try{value=await response.json()}catch{throw Error(label+' returned an unreadable response.')}if(!response.ok)throw Error(value.detail||label+' failed.');return value}
+  async function resolveApi(){
+    $('record').disabled=$('wake').disabled=$('send').disabled=$('previewVoice').disabled=true;const page=location.href.endsWith('/')?location.href:location.href+'/';const candidates=[new URL('health',page),new URL('/health',location.origin)];
+    for(const health of candidates){try{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),4000);const response=await fetch(health,{cache:'no-store',signal:controller.signal});clearTimeout(timer);const value=await response.json();if(response.ok&&value.service==='exocortex-private-voice'){apiBase=new URL('.',health);try{const config=await jsonResponse(await fetch(endpoint('config'),{cache:'no-store'}),'Client configuration');wakeWord=config.wake_word||wakeWord;wakeAliases=Array.isArray(config.wake_aliases)?config.wake_aliases:wakeAliases;wakeClipMs=config.wake_clip_ms||wakeClipMs;commandMaxMs=config.wake_command_max_ms||commandMaxMs;silenceMs=config.wake_silence_ms||silenceMs;conversationReplyMs=config.conversation_reply_window_ms||conversationReplyMs;rearmDelayMs=config.conversation_rearm_delay_ms||rearmDelayMs;streamStartTimeoutMs=config.stream_start_timeout_ms||streamStartTimeoutMs;if(Array.from($('replyWindow').options).some(option=>Number(option.value)===conversationReplyMs))$('replyWindow').value=String(conversationReplyMs);streamingTts=config.streaming_tts!==false;$('wake').textContent='Enable “'+wakeWord+'”'}catch{}$('record').disabled=$('wake').disabled=$('send').disabled=$('previewVoice').disabled=false;$('status').textContent='Private gateway connected—ready.';configureSpeakerAwareness();return}}catch{}}
+    throw Error('Voice gateway route is unreachable. Restore the private /voice Tailnet route, then refresh.');
+  }
+  function endpoint(name){if(!apiBase)throw Error('Private gateway is not connected yet.');return new URL('v1/voice/'+name,apiBase)}
+  async function configureSpeakerAwareness(){try{const state=await jsonResponse(await fetch(endpoint('speaker/status'),{cache:'no-store'}),'Speaker status');$('ownerOnly').disabled=!state.enrolled;if(!state.enrolled)$('ownerOnly').title='Enroll your voice first.'}catch{$('ownerOnly').disabled=true}}
+  async function verifyOwner(blob){const form=new FormData();form.append('audio',blob,'owner-check');const result=await jsonResponse(await fetch(endpoint('speaker/verify'),{method:'POST',body:form,cache:'no-store'}),'Owner voice check');if(!result.accepted)throw Error('Non-owner/background speech ignored (voice score '+result.score+').');return result}
+  function mime(){return ['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(x=>MediaRecorder.isTypeSupported(x))||''}
+  async function startMeter(mediaStream){
+    const Context=window.AudioContext||window.webkitAudioContext;if(!Context)return;
+    audioContext=new Context();await audioContext.resume();source=audioContext.createMediaStreamSource(mediaStream);analyser=audioContext.createAnalyser();analyser.fftSize=256;source.connect(analyser);
+    const samples=new Uint8Array(analyser.fftSize);heardAudio=false;$('meter').classList.add('live');
+    const draw=()=>{analyser.getByteTimeDomainData(samples);let sum=0;for(const sample of samples){const value=(sample-128)/128;sum+=value*value}const rms=Math.sqrt(sum/samples.length),percent=Math.min(100,Math.round(rms*500));micLevel=percent;if(percent>4)heardAudio=true;$('level').style.width=percent+'%';$('meter').setAttribute('aria-valuenow',percent);levelFrame=requestAnimationFrame(draw)};draw();
+  }
+  async function stopMeter(){
+    if(levelFrame)cancelAnimationFrame(levelFrame);levelFrame=undefined;if(source)source.disconnect();source=undefined;analyser=undefined;
+    if(audioContext){await audioContext.close().catch(()=>{});audioContext=undefined}micLevel=0;$('meter').classList.remove('live');$('level').style.width='0';$('meter').setAttribute('aria-valuenow','0');
+  }
+  function matchWakeWord(text){for(const alias of wakeAliases){const escaped=alias.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),pattern=new RegExp('(^|\\b)'+escaped+'(\\b|$)','i'),match=pattern.exec(text);if(match)return{heard:true,command:text.slice(match.index+match[0].length).replace(/^[\s,.:;!?—-]+/,'').trim()}}return{heard:false,command:''}}
+  function chime(){try{const oscillator=audioContext.createOscillator(),gain=audioContext.createGain();oscillator.frequency.value=660;gain.gain.setValueAtTime(.12,audioContext.currentTime);gain.gain.exponentialRampToValueAtTime(.001,audioContext.currentTime+.16);oscillator.connect(gain);gain.connect(audioContext.destination);oscillator.start();oscillator.stop(audioContext.currentTime+.17)}catch{}}
+  function beginWakeClip(){
+    if(!wakeEnabled||wakePhase!=='wake')return;wakeChunks=[];const generation=wakeGeneration;const type=mime();wakeRecorder=new MediaRecorder(wakeStream,type?{mimeType:type}:undefined);
+    wakeRecorder.ondataavailable=event=>{if(event.data.size)wakeChunks.push(event.data)};
+    wakeRecorder.onstop=()=>{clearTimeout(wakeTimer);const blob=new Blob(wakeChunks,{type:wakeRecorder.mimeType||'audio/webm'});if(!wakeEnabled||wakePhase!=='wake'||generation!==wakeGeneration)return;beginWakeClip();queueWakeDetection(blob,generation)};
+    wakeRecorder.start();wakeTimer=setTimeout(()=>{if(wakeRecorder.state==='recording')wakeRecorder.stop()},wakeClipMs);
+  }
+  function queueWakeDetection(blob,generation){
+    if(wakeQueue.length>=2){wakeQueue.shift();wakeDropped++}wakeQueue.push({blob,generation});drainWakeQueue();
+  }
+  async function drainWakeQueue(){
+    if(wakeTranscribing||!wakeQueue.length)return;const next=wakeQueue.shift();wakeTranscribing=true;try{await detectWake(next.blob,next.generation)}finally{wakeTranscribing=false;if(wakeQueue.length)drainWakeQueue()}
+  }
+  async function detectWake(blob,generation){
+    const started=performance.now();
+    try{const request=new FormData();request.append('audio',blob,'gauss-listen');request.append('session_id',wakeSession);const result=await jsonResponse(await fetch(endpoint('wake'),{method:'POST',body:request,cache:'no-store'}),'Neural wake detection');wakeAttempts++;
+      if(wakeEnabled&&wakePhase==='wake'&&!result.heard&&wakeAttempts%3===0){$('wakeHeard').textContent='Listener active · '+wakeAttempts+' windows checked · last '+Math.round(performance.now()-started)+' ms via '+(result.detection_path||'neural KWS')+(wakeDropped?' · '+wakeDropped+' stale window'+(wakeDropped===1?'':'s')+' skipped':'');$('wakeHeard').classList.remove('hidden')}
+      if(!wakeEnabled||wakePhase!=='wake'||generation!==wakeGeneration||!result.heard)return;const transcript=result.transcript||result.keyword||wakeWord;$('wakeHeard').textContent='Neural wake heard privately: “'+transcript+'”';$('wakeHeard').classList.remove('hidden');const wake=matchWakeWord(transcript);await activateGauss(wake.command||'');
+    }catch(error){if(wakeEnabled&&generation===wakeGeneration)$('status').textContent='Gauss listener retrying after: '+error.message}
+  }
+  async function activateGauss(inlineCommand=''){
+    if(!wakeEnabled||wakePhase!=='wake')return;wakeGeneration++;wakeQueue=[];clearTimeout(wakeTimer);if(inlineCommand&&wakeRecorder&&wakeRecorder.state==='recording'){adoptWakeRecorderForCommand(inlineCommand);return}wakePhase='activating';if(wakeRecorder&&wakeRecorder.state==='recording')wakeRecorder.stop();chime();setStage('send');
+    $('status').textContent=wakeWord+' heard you—speak your request now.';await new Promise(resolve=>setTimeout(resolve,250));startCommandCapture();
+  }
+  function adoptWakeRecorderForCommand(prefix){
+    wakePhase='command';let speechStarted=true,lastVoice=Date.now(),recorderRef=wakeRecorder;setStage('send');$('status').textContent=wakeWord+' heard—keep speaking naturally…';
+    recorderRef.onstop=async()=>{clearTimeout(commandTimer);clearInterval(silenceTimer);const blob=new Blob(wakeChunks,{type:recorderRef.mimeType||'audio/webm'});if(!wakeEnabled)return;wakePhase='busy';const outcome=await submit(blob,prefix,true);await continueConversation(outcome)};
+    silenceTimer=setInterval(()=>{if(micLevel>5){speechStarted=true;lastVoice=Date.now()}if(speechStarted&&Date.now()-lastVoice>silenceMs&&recorderRef.state==='recording')recorderRef.stop()},100);commandTimer=setTimeout(()=>{if(recorderRef.state==='recording')recorderRef.stop()},commandMaxMs);
+  }
+  function startCommandCapture(followup=false){
+    if(!wakeEnabled)return;wakePhase=followup?'followup':'command';wakeChunks=[];let speechStarted=false,lastVoice=Date.now();const type=mime();wakeRecorder=new MediaRecorder(wakeStream,type?{mimeType:type}:undefined);
+    wakeRecorder.ondataavailable=event=>{if(event.data.size)wakeChunks.push(event.data)};
+    wakeRecorder.onstop=async()=>{clearTimeout(commandTimer);clearInterval(silenceTimer);const blob=new Blob(wakeChunks,{type:wakeRecorder.mimeType||'audio/webm'});if(!wakeEnabled)return;if(!speechStarted||blob.size===0){resumeWake(followup?'Conversation paused. Say “'+wakeWord+'” when you want me again.':'I did not hear a request. Listening for '+wakeWord+' again…');return}wakePhase='busy';const outcome=await submit(blob);await continueConversation(outcome)};
+    wakeRecorder.start();$('status').textContent=followup?'I’m listening—reply naturally within '+Math.round(Number($('replyWindow').value)/1000)+' seconds.':wakeWord+' heard you—speak your request now.';silenceTimer=setInterval(()=>{if(micLevel>5){if(!speechStarted){speechStarted=true;clearTimeout(commandTimer);commandTimer=setTimeout(()=>{if(wakeRecorder.state==='recording')wakeRecorder.stop()},commandMaxMs)}lastVoice=Date.now()}if(speechStarted&&Date.now()-lastVoice>silenceMs&&wakeRecorder.state==='recording')wakeRecorder.stop()},100);commandTimer=setTimeout(()=>{if(wakeRecorder.state==='recording')wakeRecorder.stop()},followup?Number($('replyWindow').value):commandMaxMs);
+  }
+  function waitForAudioEvent(name){return new Promise(resolve=>{const done=()=>{ $('audio').removeEventListener(name,done);resolve()};$('audio').addEventListener(name,done,{once:true});if(name==='ended'&&$('audio').ended)done();if(name==='playing'&&!$('audio').paused)done()})}
+  async function continueConversation(outcome){
+    if(!wakeEnabled)return;if(!outcome.ok){resumeWake('Last request failed: '+outcome.error+' Listening again…');return}try{if(outcome.playback.awaitingTap&&$('audio').paused){$('status').textContent='Reply ready—tap Play. I’ll listen after playback.';await waitForAudioEvent('playing')}if(outcome.playback.completion)await outcome.playback.completion;else if(!$('audio').ended)await waitForAudioEvent('ended')}catch(error){resumeWake('Playback stopped: '+error.message+' Say “'+wakeWord+'” to try again.');return}setStage(null,stages);if(!wakeEnabled)return;if(!$('continuous').checked){resumeWake();return}wakePhase='rearming';$('status').textContent='Reply finished. Opening the conversation microphone…';await new Promise(resolve=>setTimeout(resolve,rearmDelayMs));if(wakeEnabled&&wakePhase==='rearming')startCommandCapture(true)
+  }
+  function resumeWake(message){if(!wakeEnabled)return;wakePhase='wake';setStage();$('status').textContent=message||'Listening privately for “'+wakeWord+'”…';beginWakeClip()}
+  async function startWakeMode(){
+    if(!window.MediaRecorder)throw Error('This browser does not support foreground wake listening.');wakeStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});await startMeter(wakeStream);wakeEnabled=true;wakePhase='wake';wakeGeneration++;wakeTranscribing=false;wakeQueue=[];wakeAttempts=0;wakeDropped=0;wakeSession=crypto.randomUUID().replaceAll('-','');$('wakeHeard').classList.add('hidden');$('wake').textContent='Stop “'+wakeWord+'”';$('wake').classList.add('active');$('record').disabled=$('send').disabled=$('previewVoice').disabled=true;try{if(navigator.wakeLock)wakeLock=await navigator.wakeLock.request('screen')}catch{}resumeWake();
+  }
+  async function stopWakeMode(message='Gauss listener stopped.'){
+    wakeEnabled=false;wakePhase='off';wakeGeneration++;wakeQueue=[];clearTimeout(wakeTimer);clearTimeout(commandTimer);clearInterval(silenceTimer);if(wakeRecorder&&wakeRecorder.state==='recording')wakeRecorder.stop();if(wakeStream)wakeStream.getTracks().forEach(track=>track.stop());wakeStream=undefined;if(wakeLock){await wakeLock.release().catch(()=>{});wakeLock=undefined}await stopMeter();$('wake').textContent='Enable “'+wakeWord+'”';$('wake').classList.remove('active');$('record').disabled=$('send').disabled=$('previewVoice').disabled=false;setStage();$('status').textContent=message;
+  }
+  function addTurn(q,r){const el=document.createElement('div');el.className='turn';el.textContent='You: '+q+'\n';const a=document.createElement('span');a.className='answer';a.textContent=r.answer;el.append(a);const m=document.createElement('div');m.className='muted';m.textContent=`${r.selected_model} · Qwen ${r.timing_ms.inference} ms · preparing speech…`;el.append(m);$('turns').prepend(el);return m}
+  function waitForAudioStart(timeoutMs=streamStartTimeoutMs){return new Promise((resolve,reject)=>{let settled=false;const cleanup=()=>{clearTimeout(timer);$('audio').removeEventListener('playing',playing);$('audio').removeEventListener('error',failed)},finish=callback=>value=>{if(settled)return;settled=true;cleanup();callback(value)},playing=finish(resolve),failed=finish(()=>reject(Error('Browser rejected the audio stream.'))),timer=setTimeout(finish(()=>{const error=Error('Browser audio startup timed out after '+Math.round(timeoutMs/1000)+' seconds.');error.name='PlaybackTimeoutError';reject(error)}),timeoutMs);$('audio').addEventListener('playing',playing,{once:true});$('audio').addEventListener('error',failed,{once:true});try{const promise=$('audio').play();if(promise)promise.catch(finish(reject))}catch(error){finish(reject)(error)}})}
+  function resetAudioSource(){try{$('audio').pause();$('audio').removeAttribute('src');$('audio').load()}catch{}}
+  async function playWholeSpeech(text){
+    const start=performance.now(),request=new FormData();request.append('text',text);request.append('voice',$('voice').value);const response=await fetch(endpoint('speech'),{method:'POST',body:request,cache:'no-store'});if(!response.ok)throw Error('Speech synthesis failed.');const blob=await response.blob();resetAudioSource();if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl=URL.createObjectURL(blob);$('audio').src=audioUrl;$('audio').load();await waitForAudioStart();return{mode:'whole-audio fallback',startMs:Math.round(performance.now()-start)};
+  }
+  async function fetchSpeechChunk(jobId){const response=await fetch(endpoint('speech-stream/'+encodeURIComponent(jobId)),{cache:'no-store'});if(!response.ok)throw Error('Speech chunk failed with HTTP '+response.status+'.');const blob=await response.blob();if(!blob.size)throw Error('Speech chunk was empty.');return blob}
+  async function playAudioBlob(blob){resetAudioSource();if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl=URL.createObjectURL(blob);$('audio').src=audioUrl;$('audio').load();await waitForAudioStart()}
+  async function playAudioStream(jobId){resetAudioSource();if(audioUrl){URL.revokeObjectURL(audioUrl);audioUrl=undefined}$('audio').src=endpoint('speech-stream/'+encodeURIComponent(jobId));$('audio').load();await waitForAudioStart()}
+  function finishQueuedSpeech(jobIds){return(async()=>{let nextFetch=jobIds.length>1?fetchSpeechChunk(jobIds[1]):null;await waitForAudioEvent('ended');for(let index=1;index<jobIds.length;index++){const blob=await nextFetch;nextFetch=index+1<jobIds.length?fetchSpeechChunk(jobIds[index+1]):null;await playAudioBlob(blob);await waitForAudioEvent('ended')}})()}
+  async function playStreamingSpeech(text){
+    const start=performance.now(),request=new FormData();request.append('text',text);request.append('voice',$('voice').value);const job=await jsonResponse(await fetch(endpoint('speech-jobs'),{method:'POST',body:request,cache:'no-store'}),'Streaming speech setup'),jobIds=Array.isArray(job.job_ids)&&job.job_ids.length?job.job_ids:[job.job_id];if(appleMobile){const firstBlob=await fetchSpeechChunk(jobIds[0]);await playAudioBlob(firstBlob)}else{await playAudioStream(jobIds[0])}const completion=finishQueuedSpeech(jobIds);completion.catch(error=>failStage('speak','Queued speech stopped: '+error.message));return{mode:(appleMobile?'iOS-safe first chunk':'direct byte stream')+' + '+jobIds.length+' queued chunk'+(jobIds.length===1?'':'s'),startMs:Math.round(performance.now()-start),completion};
+  }
+  async function playSpeech(text){
+    let fallbackReason;if(streamingTts){try{return await playStreamingSpeech(text)}catch(error){if(error.name==='NotAllowedError')return{mode:'tap-to-play stream',startMs:null,awaitingTap:true};fallbackReason=error.message;resetAudioSource();$('status').textContent='Stream failed ('+fallbackReason+')—using whole-audio fallback…'}}try{const playback=await playWholeSpeech(text);playback.fallbackReason=fallbackReason;return playback}catch(error){if(error.name==='NotAllowedError'||error.name==='PlaybackTimeoutError')return{mode:'tap-to-play fallback',startMs:null,awaitingTap:true,fallbackReason};throw error}
+  }
+  async function submit(blob,textOverride,allowEmptyAudio=false){
+    $('record').disabled=$('send').disabled=true;let transcript,current='send',sttMs=0;setStage('send');$('preview').classList.add('hidden');
+    try{
+      if(blob){
+        $('status').textContent='Sending recording securely over your tailnet…';if($('ownerOnly').checked){$('status').textContent='Checking the enrolled owner voice locally…';await verifyOwner(blob)}const upload=new FormData();upload.append('audio',blob,'voice-input');if(allowEmptyAudio){upload.append('allow_empty','true');upload.append('command_tail','true')}
+        current='stt';setStage('stt',['send']);$('status').textContent='Transcribing locally on the Spark…';
+        upload.append('stt_mode',$('sttMode').value);const stt=await jsonResponse(await fetch(endpoint('transcribe'),{method:'POST',body:upload,cache:'no-store'}),'Transcription');sttMs=stt.timing_ms?.stt||0;transcript=[textOverride,stt.transcript].filter(Boolean).join(' ').trim();if(!transcript)throw Error('No speech was detected.');
+      }else{transcript=(textOverride||$('text').value).trim();if(!transcript)throw Error('Type a message first.');}
+      $('preview').textContent='You said: '+transcript;$('preview').classList.remove('hidden');
+      current='think';setStage('think',['send','stt']);$('status').textContent='Transcript ready. Qwen is thinking…';
+      const request=new FormData();request.append('text',transcript);request.append('model',$('model').value);request.append('effort',$('effort').value);request.append('tool_profile',$('web').checked?'web':'none');request.append('history_json',JSON.stringify(history));
+      const result=await jsonResponse(await fetch(endpoint('respond'),{method:'POST',body:request,cache:'no-store'}),'Model response');
+      history.push({role:'user',content:transcript},{role:'assistant',content:result.answer});while(history.length>12)history.shift();const timingNode=addTurn(transcript,result);$('text').value='';
+      current='speak';setStage('speak',['send','stt','think']);$('status').textContent='Reply received. Creating private speech…';
+      const playback=await playSpeech(result.answer);timingNode.textContent=result.selected_model+' · STT '+sttMs+' ms · Qwen '+result.timing_ms.inference+' ms · speech start '+(playback.startMs??'tap')+' ms · '+playback.mode;setStage(null,stages);$('status').textContent=playback.awaitingTap?'Text reply ready—tap Play for audio.':'Speaking via '+playback.mode+'—audio began in '+playback.startMs+' ms.'+(playback.fallbackReason?' Stream error: '+playback.fallbackReason:'');
+      return{ok:true,playback};
+    }catch(error){const message=error.message==='Failed to fetch'?'Could not reach the private gateway. Check the /voice Tailnet route and refresh.':error.message;failStage(current,message);return{ok:false,error:message}}finally{$('record').disabled=$('send').disabled=wakeEnabled}
+  }
+  $('send').onclick=()=>submit();
+  $('wake').onclick=async()=>{try{if(wakeEnabled)await stopWakeMode();else{if(!apiBase)throw Error('Private gateway is not connected yet.');$('status').textContent='Starting the private Gauss listener…';await startWakeMode()}}catch(error){await stopWakeMode(error.message)}};
+  $('previewVoice').onclick=async()=>{let current='speak';try{$('previewVoice').disabled=true;setStage('speak');$('status').textContent='Preparing a streaming voice preview locally…';const playback=await playSpeech("Hello. I'm Gauss, and I'm right here with you.");setStage(null,['speak']);$('status').textContent=playback.awaitingTap?'Preview ready—tap Play.':'Preview via '+playback.mode+'—audio began in '+playback.startMs+' ms.'}catch(error){failStage(current,error.message)}finally{$('previewVoice').disabled=false}};
+  $('clear').onclick=()=>{history.length=0;$('turns').textContent='';$('preview').classList.add('hidden');setStage();$('status').textContent='Conversation cleared from memory.'};
+  $('record').onclick=async()=>{try{
+    if(recorder&&recorder.state==='recording'){recorder.stop();await stopMeter();$('record').textContent='Start recording';$('record').classList.remove('recording');$('status').textContent=heardAudio?'Uploading and processing audio locally…':'No clear sound level detected; sending the recording anyway…';return}
+    if(!window.MediaRecorder)throw Error('This browser does not support recording. Use the text box.');
+    $('status').textContent='Requesting microphone permission…';stream=await navigator.mediaDevices.getUserMedia({audio:true});chunks=[];const type=mime();recorder=new MediaRecorder(stream,type?{mimeType:type}:undefined);try{await startMeter(stream)}catch{await stopMeter()}
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());submit(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}))};
+    recorder.start();$('record').textContent='Stop and send';$('record').classList.add('recording');$('status').textContent='Microphone live—speak now. The green bar should move.';
+  }catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());await stopMeter();$('record').textContent='Start recording';$('record').classList.remove('recording');$('status').textContent=e.message}};
+  try{const savedVoice=localStorage.getItem('exocortex.voice.v1');if(savedVoice&&Array.from($('voice').options).some(option=>option.value===savedVoice))$('voice').value=savedVoice}catch{}
+  $('voice').addEventListener('change',()=>{try{localStorage.setItem('exocortex.voice.v1',$('voice').value)}catch{}});
+  try{const reply=localStorage.getItem('exocortex.reply-window.v1');if(reply&&Array.from($('replyWindow').options).some(option=>option.value===reply))$('replyWindow').value=reply;const continuous=localStorage.getItem('exocortex.continuous.v1');if(continuous!==null)$('continuous').checked=continuous==='true'}catch{}
+  $('replyWindow').addEventListener('change',()=>{try{localStorage.setItem('exocortex.reply-window.v1',$('replyWindow').value)}catch{}});$('continuous').addEventListener('change',()=>{try{localStorage.setItem('exocortex.continuous.v1',String($('continuous').checked))}catch{}});
+  $('audio').addEventListener('play',()=>{if(wakeEnabled&&wakePhase==='wake'){wakePhase='playback';wakeGeneration++;clearTimeout(wakeTimer);if(wakeRecorder&&wakeRecorder.state==='recording')wakeRecorder.stop();$('status').textContent='Gauss listening paused during playback.'}});
+  $('audio').addEventListener('ended',()=>{if(wakeEnabled&&wakePhase==='playback')resumeWake()});
+  document.addEventListener('visibilitychange',()=>{if(wakeEnabled&&document.hidden)$('status').textContent=wakeWord+' listening may pause while this page is in the background.';else if(wakeEnabled&&wakePhase==='wake')$('status').textContent='Listening privately for “'+wakeWord+'”…'});
+  resolveApi().catch(error=>failStage(null,error.message));
+</script>
+</body></html>

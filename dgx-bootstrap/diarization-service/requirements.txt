@@ -1,0 +1,4 @@
+# Match the versions already validated in the pinned NeMo 26.02 base image.
+fastapi==0.135.1
+python-multipart==0.0.22
+uvicorn==0.42.0

@@ -1,0 +1,14 @@
+provider: searxng
+searxng:
+  endpoint: http://searxng:8080/search
+  language: en
+  safesearch: 1
+  categories: general
+commercial_providers:
+  # Reserved for future provider switching without changing MCP clients.
+  brave:
+    enabled: false
+    api_key_env: BRAVE_SEARCH_API_KEY
+  tavily:
+    enabled: false
+    api_key_env: TAVILY_API_KEY

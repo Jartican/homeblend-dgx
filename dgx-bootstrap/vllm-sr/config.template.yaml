@@ -1,0 +1,90 @@
+# Rendered by setup-vllm-semantic-router.sh. Do not put real secrets in this file.
+version: v0.3
+
+listeners:
+  - name: "http-8899"
+    address: "0.0.0.0"
+    port: 8899
+    timeout: "300s"
+
+providers:
+  defaults:
+    default_model: "exocortex-chat-fast"
+  models:
+    - name: "exocortex-chat-fast"
+      backend_refs:
+        - name: "litellm"
+          weight: 100
+          endpoint: "host.docker.internal:14000"
+          protocol: "http"
+          api_key: "__LITELLM_KEY__"
+    - name: "exocortex-agent-quality"
+      backend_refs:
+        - name: "litellm"
+          weight: 100
+          endpoint: "host.docker.internal:14000"
+          protocol: "http"
+          api_key: "__LITELLM_KEY__"
+
+routing:
+  modelCards:
+    - name: "exocortex-chat-fast"
+      param_size: "8b"
+      description: "Low-latency private conversational model."
+      capabilities: ["chat", "short-context", "tool-selection"]
+      quality_score: 0.456
+    - name: "exocortex-agent-quality"
+      param_size: "27b"
+      description: "Private quality model for larger text tasks."
+      capabilities: ["coding", "repository-reasoning", "summarization", "extraction"]
+      quality_score: 0.687
+
+  signals:
+    keywords:
+      - name: "explicit-quality"
+        operator: "OR"
+        case_sensitive: false
+        # Do not include leading brackets here: the exact keyword engine wraps
+        # word-containing terms in word boundaries.
+        keywords: ["route:quality", "effort:high", "effort:max"]
+    context:
+      - name: "long-context"
+        min_tokens: "12K"
+        max_tokens: "32K"
+        description: "Escalate prompts approaching the fast model's practical context budget."
+
+  decisions:
+    - name: "explicit-quality-route"
+      description: "A deterministic, user-visible quality override for challenger smoke tests."
+      priority: 200
+      rules:
+        operator: "OR"
+        conditions:
+          - type: "keyword"
+            name: "explicit-quality"
+          - type: "context"
+            name: "long-context"
+      modelRefs:
+        - model: "exocortex-agent-quality"
+          use_reasoning: false
+    - name: "default-fast-route"
+      description: "Catch-all fast route. This challenger is not wired into production."
+      priority: 1
+      rules:
+        operator: "AND"
+        conditions: []
+      modelRefs:
+        - model: "exocortex-chat-fast"
+          use_reasoning: false
+
+global:
+  router:
+    strategy: priority
+    clear_route_cache: true
+  services:
+    response_api:
+      enabled: false
+      store_backend: memory
+    router_replay:
+      enabled: false
+      store_backend: memory

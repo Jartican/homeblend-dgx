@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Gauss Private Transcript</title>
+  <style>
+    :root{color-scheme:dark;font:16px system-ui;background:#0c1117;color:#e6edf3}body{max-width:44rem;margin:auto;padding:1rem}
+    .card{background:#151b23;border:1px solid #30363d;border-radius:14px;padding:1rem;margin:.8rem 0}.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+    button{font:inherit;min-height:3rem;padding:.7rem 1rem;border:1px solid #48515d;border-radius:10px;background:#202833;color:inherit;font-weight:700}button.primary{background:#238636}button.danger{background:#da3633}button:disabled{opacity:.45}
+    .muted{color:#9da7b3}.recording{padding:.75rem;border-radius:10px;background:#6e1b1b;color:white;font-weight:800;animation:pulse 1.2s infinite}.hidden{display:none}
+    .segment{border-top:1px solid #30363d;padding:.65rem 0}.speaker{color:#b6e3ff;font-weight:700}.time{color:#9da7b3;font-size:.85rem}@keyframes pulse{50%{opacity:.62}}
+  </style>
+</head>
+<body>
+  <h1>Gauss · private conversation transcript</h1>
+  <div class="card">
+    <p>This is separate from personal assistant mode. It includes every detected speaker and does not identify them by name.</p>
+    <label><input id="consent" type="checkbox"> I confirm every participant has agreed to this recording and transcription.</label>
+    <div id="indicator" class="recording hidden">● RECORDING · <span id="timer">00:00</span></div>
+    <p class="row"><button id="start" class="primary" disabled>Start transcript</button><button id="stop" disabled>Stop & process</button><button id="discard" class="danger" disabled>Stop & discard</button></p>
+    <p id="status" class="muted">Checking the private service…</p>
+  </div>
+  <div id="result" class="card"><span class="muted">No transcript in this page’s memory.</span></div>
+  <p><a href="./">Back to Gauss</a></p>
+<script>
+  const $=id=>document.getElementById(id);let recorder,stream,chunks=[],startedAt,timerHandle,apiBase;
+  const mime=()=>['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type))||'';
+  function endpoint(name){return new URL('v1/voice/'+name,apiBase)}
+  async function json(response){let value;try{value=await response.json()}catch{throw Error('Private service returned unreadable data.')}if(!response.ok)throw Error(value.detail||'Private service rejected the request.');return value}
+  async function connect(){
+    const page=location.href.endsWith('/')?location.href:location.href+'/';
+    for(const health of [new URL('../health',page),new URL('/health',location.origin)]){try{const response=await fetch(health,{cache:'no-store'}),value=await response.json();if(response.ok&&value.service==='exocortex-private-voice'){apiBase=new URL('.',health);$('status').textContent='Private transcript service ready.';$('start').disabled=!$('consent').checked;return}}catch{}}
+    throw Error('Private transcript route is unreachable.');
+  }
+  function elapsed(){const seconds=Math.floor((Date.now()-startedAt)/1000);$('timer').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')}
+  async function stopTracks(){if(stream)stream.getTracks().forEach(track=>track.stop());stream=undefined;clearInterval(timerHandle);$('indicator').classList.add('hidden');$('start').disabled=!apiBase||!$('consent').checked;$('stop').disabled=$('discard').disabled=true}
+  async function begin(){
+    if(!$('consent').checked)throw Error('Confirm participant consent first.');
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:false,autoGainControl:false}});chunks=[];const type=mime();recorder=new MediaRecorder(stream,type?{mimeType:type}:undefined);recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data)};recorder.start(1000);startedAt=Date.now();elapsed();timerHandle=setInterval(elapsed,500);$('indicator').classList.remove('hidden');$('start').disabled=true;$('stop').disabled=$('discard').disabled=false;$('status').textContent='Recording locally. Everyone must be able to see or hear that recording is active.';
+  }
+  async function finish(process){
+    if(!recorder||recorder.state!=='recording')return;const stopped=new Promise(resolve=>recorder.addEventListener('stop',resolve,{once:true}));recorder.stop();await stopped;await stopTracks();const blob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'});chunks=[];
+    if(!process){$('status').textContent='Recording discarded from browser memory; nothing was sent.';return}
+    if(!$('consent').checked){$('status').textContent='Consent was withdrawn. Recording discarded; nothing was sent.';return}
+    $('status').textContent='Sending privately, separating speakers, and transcribing locally…';const form=new FormData();form.append('audio',blob,'consented-conversation');form.append('consent','true');
+    try{const value=await json(await fetch(endpoint('transcript'),{method:'POST',body:form,cache:'no-store'}));render(value);$('status').textContent='Finished in '+(value.elapsed_ms/1000).toFixed(1)+' s. Raw audio was discarded; this derived text exists only in this page’s memory.'}catch(error){$('status').textContent=error.message}
+  }
+  function render(value){$('result').textContent='';for(const segment of value.segments){const row=document.createElement('div');row.className='segment';const speaker=document.createElement('span');speaker.className='speaker';speaker.textContent=segment.speaker;const time=document.createElement('span');time.className='time';time.textContent=' · '+Number(segment.start_seconds).toFixed(1)+'–'+Number(segment.end_seconds).toFixed(1)+' s';const text=document.createElement('div');text.textContent=segment.text||'[no words recognized]';row.append(speaker,time,text);$('result').append(row)}if(!value.segments.length)$('result').textContent='No speech segments were detected.'}
+  $('consent').onchange=()=>{$('start').disabled=!apiBase||!$('consent').checked;if(!$('consent').checked&&recorder&&recorder.state==='recording')finish(false)};
+  $('start').onclick=()=>begin().catch(error=>$('status').textContent=error.message);$('stop').onclick=()=>finish(true);$('discard').onclick=()=>finish(false);
+  addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(track=>track.stop())});connect().catch(error=>$('status').textContent=error.message);
+</script>
+</body></html>

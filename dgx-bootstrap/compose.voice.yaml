@@ -1,0 +1,141 @@
+services:
+  speaches:
+    build:
+      context: ./voice-speech
+      args:
+        SPEACHES_BASE_IMAGE: ${SPEACHES_IMAGE:-ghcr.io/speaches-ai/speaches@sha256:2fedebb4b4dccd37ab8f233374ae32bd5b11ee96e8033d2a0a230b9cd052e409}
+    image: ${SPEACHES_RUNTIME_IMAGE:-exocortex/speaches:private}
+    # Bound the lifetime of phonemizer's isolated eSpeak copies without
+    # recycling the speech service during ordinary interactive use.
+    command: ["uvicorn", "--factory", "speaches.main:create_app", "--limit-max-requests", "${SPEACHES_MAX_REQUESTS:-5000}"]
+    platform: linux/arm64
+    container_name: ${SPEACHES_CONTAINER:-exocortex-speaches}
+    restart: unless-stopped
+    networks:
+      - voice-private
+      - bootstrap-egress
+    environment:
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      WHISPER__CPU_THREADS: ${SPEACHES_CPU_THREADS:-6}
+      WHISPER__TTL: ${SPEACHES_WHISPER_TTL:-60}
+      ENABLE_UI: "false"
+      LOG_LEVEL: info
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      - speaches-cache:/home/ubuntu/.cache/huggingface/hub
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${SPEACHES_MEMORY_LIMIT:-8g}
+    cpus: ${SPEACHES_CPU_LIMIT:-6.0}
+    tmpfs:
+      # Kokoro's phonemizer copies libespeak-ng here before dynamically loading
+      # it. `exec` is therefore required; the mount remains bounded/nosuid.
+      - /tmp:rw,nosuid,exec,size=1g
+    healthcheck:
+      # A TCP readiness probe does not consume Uvicorn's request budget.
+      test: ["CMD", "python", "-c", "import socket; connection=socket.create_connection(('127.0.0.1',8000),3); connection.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 10m
+
+  voice-gateway:
+    build:
+      context: ./voice-gateway
+    image: ${VOICE_GATEWAY_IMAGE:-exocortex/voice-gateway:local}
+    container_name: ${VOICE_GATEWAY_CONTAINER:-exocortex-voice-gateway}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      VOICE_GATEWAY_PORT: ${VOICE_GATEWAY_PORT:-8791}
+      # setup-private-voice.sh discovers this internal-only container address.
+      VOICE_SPEACHES_URL: ${VOICE_SPEACHES_URL:-http://127.0.0.1:9/v1}
+      VOICE_HOMEBLEND_URL: http://127.0.0.1:${HOMEBLEND_HARNESS_PORT:-8770}/v1
+      # setup-private-voice.sh discovers this internal-only container address.
+      VOICE_SPEAKER_URL: ${VOICE_SPEAKER_URL:-http://127.0.0.1:9/v1/speaker}
+      VOICE_NEURAL_WAKE_URL: ${VOICE_NEURAL_WAKE_URL:-}
+      VOICE_DENOISER_URL: ${VOICE_DENOISER_URL:-}
+      VOICE_DIARIZATION_URL: ${VOICE_DIARIZATION_URL:-}
+      VOICE_MAX_AUDIO_BYTES: ${VOICE_MAX_AUDIO_BYTES:-20000000}
+      DIARIZATION_MAX_AUDIO_BYTES: ${DIARIZATION_MAX_AUDIO_BYTES:-100000000}
+      VOICE_MAX_DIARIZATION_SEGMENTS: ${VOICE_MAX_DIARIZATION_SEGMENTS:-80}
+      VOICE_MAX_TEXT_CHARACTERS: ${VOICE_MAX_TEXT_CHARACTERS:-20000}
+      VOICE_MAX_TTS_CHARACTERS: ${VOICE_MAX_TTS_CHARACTERS:-4000}
+      VOICE_UPSTREAM_TIMEOUT_SECONDS: ${VOICE_UPSTREAM_TIMEOUT_SECONDS:-300}
+      SPEACHES_STT_MODEL: ${SPEACHES_STT_MODEL:-Systran/faster-whisper-small}
+      SPEACHES_FAST_STT_MODEL: ${SPEACHES_FAST_STT_MODEL:-Systran/faster-whisper-tiny.en}
+      SPEACHES_MULTILINGUAL_STT_MODEL: ${SPEACHES_MULTILINGUAL_STT_MODEL:-Systran/faster-whisper-small}
+      SPEACHES_WAKE_STT_MODEL: ${SPEACHES_WAKE_STT_MODEL:-Systran/faster-whisper-tiny.en}
+      SPEACHES_TTS_MODEL: ${SPEACHES_TTS_MODEL:-speaches-ai/Kokoro-82M-v1.0-ONNX}
+      SPEACHES_TTS_VOICE: ${SPEACHES_TTS_VOICE:-af_heart}
+      VOICE_WAKE_WORD: ${VOICE_WAKE_WORD:-Gauss}
+      VOICE_WAKE_ALIASES: ${VOICE_WAKE_ALIASES:-gauss,gaus,goss,gouse,gauze}
+      VOICE_WAKE_PROMPT: ${VOICE_WAKE_PROMPT:-The speaker may say the wake word Gauss.}
+      VOICE_WAKE_HOTWORDS: ${VOICE_WAKE_HOTWORDS:-Gauss}
+      VOICE_WAKE_VAD_FILTER: ${VOICE_WAKE_VAD_FILTER:-true}
+      VOICE_WAKE_ASR_FALLBACK: ${VOICE_WAKE_ASR_FALLBACK:-true}
+      VOICE_WAKE_ASR_RMS_THRESHOLD: ${VOICE_WAKE_ASR_RMS_THRESHOLD:-0.008}
+      VOICE_WAKE_CLIP_MS: ${VOICE_WAKE_CLIP_MS:-2500}
+      VOICE_WAKE_COMMAND_MAX_MS: ${VOICE_WAKE_COMMAND_MAX_MS:-10000}
+      VOICE_WAKE_SILENCE_MS: ${VOICE_WAKE_SILENCE_MS:-800}
+      VOICE_CONVERSATION_REPLY_WINDOW_MS: ${VOICE_CONVERSATION_REPLY_WINDOW_MS:-8000}
+      VOICE_CONVERSATION_REARM_DELAY_MS: ${VOICE_CONVERSATION_REARM_DELAY_MS:-150}
+      VOICE_STREAM_START_TIMEOUT_MS: ${VOICE_STREAM_START_TIMEOUT_MS:-20000}
+      VOICE_TTS_STREAM_CHUNK_CHARACTERS: ${VOICE_TTS_STREAM_CHUNK_CHARACTERS:-180}
+      VOICE_TTS_FIRST_CHUNK_CHARACTERS: ${VOICE_TTS_FIRST_CHUNK_CHARACTERS:-40}
+      VOICE_SPEECH_JOB_TTL_SECONDS: ${VOICE_SPEECH_JOB_TTL_SECONDS:-60}
+      VOICE_MAX_SPEECH_JOBS: ${VOICE_MAX_SPEECH_JOBS:-64}
+      # Disabled until the streaming STT/inference/TTS workers land. The v2
+      # protocol and capability endpoint remain build-tested in the image.
+      VOICE_REALTIME_ENABLED: ${VOICE_REALTIME_ENABLED:-false}
+      # Set to /run/secrets/homeblend/clients.json after enrolling the signed
+      # iPhone app. A configured registry takes precedence over legacy hashes.
+      # While the migration bridge is true, only an entirely absent credential
+      # may use the bridge; a supplied malformed or wrong credential still fails.
+      VOICE_REALTIME_CLIENT_REGISTRY: ${VOICE_REALTIME_CLIENT_REGISTRY:-}
+      VOICE_REALTIME_CLIENT_TOKEN_SHA256: ${VOICE_REALTIME_CLIENT_TOKEN_SHA256:-}
+      VOICE_REALTIME_MAX_SESSION_SECONDS: ${VOICE_REALTIME_MAX_SESSION_SECONDS:-3600}
+      # Temporary migration bridge. Safe only because Voice Core binds loopback
+      # and Tailscale Serve is the sole remote ingress. Remove after token rollout.
+      VOICE_REALTIME_ALLOW_TAILNET_UNAUTHENTICATED: ${VOICE_REALTIME_ALLOW_TAILNET_UNAUTHENTICATED:-false}
+      VOICE_AUDIT_LOG: /var/lib/homeblend/voice-turns.jsonl
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: ${VOICE_GATEWAY_MEMORY_LIMIT:-1g}
+    cpus: ${VOICE_GATEWAY_CPU_LIMIT:-2.0}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    volumes:
+      - voice-audit:/var/lib/homeblend
+      - ${HOME}/.config/homeblend/voice-core:/run/secrets/homeblend:ro
+    depends_on:
+      speaches:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ['VOICE_GATEWAY_PORT']+'/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+
+networks:
+  voice-private:
+    external: true
+    name: ${EXOCORTEX_VOICE_NETWORK:-exocortex-voice}
+  bootstrap-egress:
+    external: true
+    name: ${OPEN_WEBUI_NETWORK:-exocortex-tools}
+
+volumes:
+  speaches-cache:
+    name: ${SPEACHES_CACHE_VOLUME:-exocortex-speaches-cache}
+  voice-audit:
+    name: ${VOICE_AUDIT_VOLUME:-exocortex-voice-audit}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Gauss Speaker Setup</title>
+  <style>
+    :root{color-scheme:dark;font:16px system-ui;background:#0c1117;color:#e6edf3}body{max-width:40rem;margin:auto;padding:1rem}
+    .card{background:#151b23;border:1px solid #30363d;border-radius:14px;padding:1rem;margin:.8rem 0}.row{display:flex;gap:.6rem;flex-wrap:wrap}
+    button{font:inherit;min-height:3rem;padding:.7rem 1rem;border:1px solid #48515d;border-radius:10px;background:#202833;color:inherit;font-weight:700}
+    button.primary{background:#238636}button.recording{background:#da3633}button:disabled{opacity:.45}.muted{color:#9da7b3}.good{color:#56d364}.bad{color:#ff7b72}
+  </style>
+</head>
+<body>
+  <h1>Gauss · private speaker setup</h1>
+  <div class="card">Record five different phrases in your normal voice. Vary your distance slightly. Raw clips stay in this page’s memory until enrollment, then are discarded. Only the averaged TitaNet embedding is retained in the encrypted vault.</div>
+  <div class="card">
+    <p id="phrase"></p><p id="count" class="muted">0 of 5 samples collected</p>
+    <div class="row"><button id="sample" class="primary">Start sample</button><button id="clear">Clear samples</button><button id="enroll" disabled>Enroll voice</button></div>
+    <p id="status" class="muted">Checking encrypted speaker service…</p>
+  </div>
+  <div class="card">
+    <h2>Held-out test</h2><p class="muted">After enrollment, record a fresh phrase that was not used above.</p>
+    <button id="verify" disabled>Start test</button><p id="result"></p>
+  </div>
+  <p><a href="./">Back to Gauss</a></p>
+<script>
+  const phrases=['Gauss, help me plan the rest of my day.','The quick brown fox walks beside the river.','Today I am speaking from a normal distance.','Please recognize my voice without saving this recording.','Mathematics helps us describe patterns in the world.'];
+  const $=id=>document.getElementById(id);let samples=[],recorder,stream,chunks=[],purpose='sample';
+  const endpoint=name=>new URL('v1/voice/speaker/'+name,new URL('.',location.href));
+  const mime=()=>['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(x=>MediaRecorder.isTypeSupported(x))||'';
+  async function json(response){let value;try{value=await response.json()}catch{throw Error('Unreadable private service response.')}if(!response.ok)throw Error(value.detail||'Private service request failed.');return value}
+  function draw(){ $('count').textContent=samples.length+' of 5 samples collected';$('phrase').textContent=samples.length<5?'Say: “'+phrases[samples.length]+'”':'Enrollment samples ready.';$('enroll').disabled=samples.length<5;$('clear').disabled=!samples.length }
+  async function status(){try{const value=await json(await fetch(endpoint('status'),{cache:'no-store'}));$('status').textContent=value.enrolled?'An owner voiceprint is already enrolled. Replacement is intentionally blocked.':'Encrypted TitaNet service ready—no voiceprint enrolled yet.';$('status').className=value.enrolled?'good':'muted';$('verify').disabled=!value.enrolled;$('sample').disabled=$('enroll').disabled=value.enrolled}catch(error){$('status').textContent=error.message;$('status').className='bad';$('sample').disabled=true}}
+  async function start(kind){if(!window.MediaRecorder)throw Error('This browser cannot record audio.');purpose=kind;stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});chunks=[];const type=mime();recorder=new MediaRecorder(stream,type?{mimeType:type}:undefined);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=finish;recorder.start();const button=$(kind==='sample'?'sample':'verify');button.textContent='Stop '+(kind==='sample'?'sample':'test');button.classList.add('recording');$('status').textContent='Recording—speak the full phrase, then stop.'}
+  async function finish(){stream.getTracks().forEach(track=>track.stop());const blob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'}),button=$(purpose==='sample'?'sample':'verify');button.classList.remove('recording');button.textContent=purpose==='sample'?'Start sample':'Start test';if(!blob.size)return;if(purpose==='sample'){samples.push(blob);draw();$('status').textContent='Sample held only in browser memory.'}else{await verifyBlob(blob)}}
+  $('sample').onclick=async()=>{try{if(recorder&&recorder.state==='recording')recorder.stop();else await start('sample')}catch(error){$('status').textContent=error.message}};
+  $('verify').onclick=async()=>{try{if(recorder&&recorder.state==='recording')recorder.stop();else await start('verify')}catch(error){$('status').textContent=error.message}};
+  $('clear').onclick=()=>{samples=[];draw();$('status').textContent='Unsubmitted recordings discarded.'};
+  $('enroll').onclick=async()=>{try{$('enroll').disabled=true;$('status').textContent='Creating embeddings locally…';const form=new FormData();samples.forEach((blob,index)=>form.append('audio',blob,'sample-'+index));const value=await json(await fetch(endpoint('enroll'),{method:'POST',body:form,cache:'no-store'}));samples=[];draw();$('status').textContent='Encrypted voiceprint enrolled from '+value.sample_count+' samples. Raw recordings discarded.';$('status').className='good';$('sample').disabled=true;$('verify').disabled=false}catch(error){$('status').textContent=error.message;$('status').className='bad';$('enroll').disabled=false}};
+  async function verifyBlob(blob){try{$('result').textContent='Comparing locally…';const form=new FormData();form.append('audio',blob,'verification');const value=await json(await fetch(endpoint('verify'),{method:'POST',body:form,cache:'no-store'}));$('result').textContent=(value.accepted?'MATCH':'NO MATCH')+' · score '+value.score+' · threshold '+value.threshold;$('result').className=value.accepted?'good':'bad'}catch(error){$('result').textContent=error.message;$('result').className='bad'}}
+  draw();status();
+</script>
+</body></html>

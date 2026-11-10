@@ -1,0 +1,74 @@
+name: exocortex-tools
+
+services:
+  searxng:
+    image: ${SEARXNG_IMAGE:-ghcr.io/searxng/searxng@sha256:11a9b34cdc0b1ec2b991470a2762ecb5a1a531898289fb51dcd015260450729e}
+    container_name: ${SEARXNG_CONTAINER:-exocortex-searxng}
+    restart: unless-stopped
+    networks:
+      - tools
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET is required}
+      FORCE_OWNERSHIP: "false"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /etc/ssl/certs:size=16m,mode=755
+      - /var/cache/searxng:size=64m,uid=977,gid=977
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 768m
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  mcp-gateway:
+    build:
+      context: ./mcp-gateway
+    image: ${MCP_GATEWAY_IMAGE:-exocortex/mcp-gateway:local}
+    container_name: ${MCP_GATEWAY_CONTAINER:-exocortex-mcp-gateway}
+    restart: unless-stopped
+    depends_on:
+      searxng:
+        condition: service_healthy
+    networks:
+      - tools
+    ports:
+      - ${MCP_GATEWAY_BIND:-127.0.0.1}:${MCP_GATEWAY_PORT:-8766}:8000
+    volumes:
+      - ./config/tools.yaml:/config/tools.yaml:ro
+      - ./config/search.yaml:/config/search.yaml:ro
+    environment:
+      EXOCORTEX_CONFIG_ROOT: /config
+      WEB_SEARCH_RESULT_LIMIT: ${WEB_SEARCH_RESULT_LIMIT:-8}
+      WEB_FETCH_MAX_BYTES: ${WEB_FETCH_MAX_BYTES:-1000000}
+      WEB_FETCH_TIMEOUT_SECONDS: ${WEB_FETCH_TIMEOUT_SECONDS:-15}
+      WEB_FETCH_USER_AGENT: ${WEB_FETCH_USER_AGENT:-Exocortex-MCP/1.0}
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+networks:
+  tools:
+    name: exocortex-tools

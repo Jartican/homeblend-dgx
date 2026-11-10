@@ -1,0 +1,12 @@
+[Unit]
+Description=Exocortex LiteLLM model gateway
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/litellm --config %h/.config/litellm/qwen.yaml --host 127.0.0.1 --port 4000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

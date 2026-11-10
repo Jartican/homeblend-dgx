@@ -1,0 +1,18 @@
+# Reference configuration only. The canonical installer generates the protected
+# runtime file at ~/.config/litellm/qwen.yaml from ~/.config/exocortex/stack.env.
+model_list:
+  - model_name: exocortex-chat-fast
+    litellm_params:
+      model: openai/exocortex-chat-fast
+      api_base: http://127.0.0.1:8001/v1
+      api_key: local-vllm
+  - model_name: exocortex-agent-quality
+    litellm_params:
+      model: ollama_chat/qwen3.8:27b
+      api_base: http://127.0.0.1:11434
+
+general_settings:
+  master_key: os.environ/LITELLM_KEY
+
+litellm_settings:
+  drop_params: true

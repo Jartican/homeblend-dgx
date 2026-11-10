@@ -1,0 +1,29 @@
+{
+  "model": "exocortex-chat-fast",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Use the lookup_memory tool to find notes about project alpha."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_memory",
+        "description": "Search saved memories",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "max_tokens": 120
+}

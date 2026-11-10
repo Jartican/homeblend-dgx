@@ -1,0 +1,10 @@
+{
+  "model": "qwen3.8:27b",
+  "max_tokens": 64,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply exactly: LiteLLM works"
+    }
+  ]
+}

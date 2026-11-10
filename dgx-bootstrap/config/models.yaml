@@ -1,0 +1,19 @@
+# Stable logical routes used by clients. Concrete runtimes may change later.
+models:
+  exocortex-chat-fast:
+    purpose: low-latency conversation and routine tool calls
+    runtime: vllm
+    source: nvidia/Qwen3-8B-NVFP4
+    served_model: exocortex-chat-fast
+    context_tokens: 32768
+  exocortex-agent-quality:
+    purpose: complex reasoning and higher-quality agent work
+    runtime: ollama
+    source: qwen3.8:27b
+    context_tokens: 262144
+
+routing:
+  default_chat: exocortex-chat-fast
+  default_agent: exocortex-agent-quality
+  escalate_from: exocortex-chat-fast
+  escalate_to: exocortex-agent-quality
